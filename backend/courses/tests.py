@@ -443,3 +443,101 @@ class Phase2EligibilityEngineTests(TestCase):
         created_course = Course.objects.get(code='ROB301')
         self.assertEqual(created_course.sections.count(), 1)
         self.assertEqual(created_course.sections.first().capacity, 25)
+
+    def test_elective_step_by_step_creation_and_draft_restoration(self):
+        """
+        Verify multi-step elective wizard:
+        - Step 1: Saves basic details (Title, Description, Deadline, Term) as draft.
+        - Step 2: Saves dynamic courses, requires at least 2 courses with individual seats/cutoffs.
+        - Step 3: Saves whole-elective criteria and finalizes draft.
+        - Verifies students cannot see drafts, but faculty can restore drafts.
+        """
+        self.client.force_authenticate(user=self.faculty_user)
+        future_deadline = (timezone.now() + timezone.timedelta(days=7)).isoformat()
+
+        # Step 1: Save basic info
+        step1_payload = {
+            'title': 'AI & Robotics Basket',
+            'description': 'Advanced electives for senior students.',
+            'submission_deadline': future_deadline,
+            'term': 'Fall 2026',
+            'department': 'Computer Science',
+        }
+        resp1 = self.client.post('/api/electives/save-step-1/', step1_payload, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_201_CREATED)
+        draft_data = resp1.json()
+        draft_id = draft_data['id']
+        self.assertTrue(draft_data['is_draft'])
+        self.assertEqual(draft_data['current_step'], 1)
+        self.assertEqual(draft_data['title'], 'AI & Robotics Basket')
+
+        # Students should NOT see this draft
+        self.client.force_authenticate(user=self.student_active.user)
+        student_resp = self.client.get('/api/electives/')
+        self.assertEqual(len([e for e in student_resp.json() if e['id'] == draft_id]), 0)
+
+        # Faculty resumes editing draft: Step 2 with < 2 courses should fail
+        self.client.force_authenticate(user=self.faculty_user)
+        invalid_step2_payload = {
+            'courses': [
+                {'code': 'AI501', 'title': 'Deep Learning', 'credits': 4, 'capacity': 40, 'min_cgpa': 8.0}
+            ]
+        }
+        resp2_invalid = self.client.post(f'/api/electives/{draft_id}/save-step-2/', invalid_step2_payload, format='json')
+        self.assertEqual(resp2_invalid.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Step 2 with 2 valid courses
+        step2_payload = {
+            'courses': [
+                {'code': 'AI501', 'title': 'Deep Learning', 'credits': 4, 'capacity': 40, 'min_cgpa': 8.0},
+                {'code': 'ROB502', 'title': 'Robotic Navigation', 'credits': 3, 'capacity': 30, 'min_cgpa': 7.5},
+            ]
+        }
+        resp2 = self.client.post(f'/api/electives/{draft_id}/save-step-2/', step2_payload, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        step2_data = resp2.json()
+        self.assertEqual(step2_data['current_step'], 2)
+        self.assertEqual(step2_data['total_courses'], 2)
+
+        # Step 3: Save whole-elective criteria without finalizing (Save Draft)
+        step3_draft_payload = {
+            'min_cgpa': 7.0,
+            'allowed_semesters': [5, 6, 7],
+            'target_degrees': ['B.Tech'],
+            'target_branches': ['CSE', 'ECE'],
+            'max_preferences': 3,
+            'finalize': False,
+        }
+        resp3_draft = self.client.post(f'/api/electives/{draft_id}/save-step-3/', step3_draft_payload, format='json')
+        self.assertEqual(resp3_draft.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp3_draft.json()['is_draft'])
+        self.assertEqual(resp3_draft.json()['current_step'], 3)
+
+        # Restore draft: fetch draft by id
+        restore_resp = self.client.get(f'/api/electives/{draft_id}/')
+        self.assertEqual(restore_resp.status_code, status.HTTP_200_OK)
+        restored = restore_resp.json()
+        self.assertEqual(restored['title'], 'AI & Robotics Basket')
+        self.assertEqual(len(restored['courses']), 2)
+        self.assertEqual(restored['min_cgpa'], 7.0)
+
+        # Finalize draft (Launch Elective)
+        finalize_payload = {
+            'min_cgpa': 7.0,
+            'allowed_semesters': [5, 6, 7],
+            'target_degrees': ['B.Tech'],
+            'target_branches': ['CSE', 'ECE'],
+            'max_preferences': 3,
+            'finalize': True,
+        }
+        resp_finalize = self.client.post(f'/api/electives/{draft_id}/save-step-3/', finalize_payload, format='json')
+        self.assertEqual(resp_finalize.status_code, status.HTTP_200_OK)
+        finalized_data = resp_finalize.json()
+        self.assertFalse(finalized_data['is_draft'])
+
+        # Now student CAN see this elective
+        self.client.force_authenticate(user=self.student_active.user)
+        student_resp2 = self.client.get('/api/electives/')
+        matching = [e for e in student_resp2.json() if e['id'] == draft_id]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]['title'], 'AI & Robotics Basket')

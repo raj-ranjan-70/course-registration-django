@@ -55,7 +55,7 @@ class ElectivePreferenceViewSet(viewsets.ModelViewSet):
         serializer = ElectivePreferenceSerializer(preferences, many=True)
 
         from courses.models import ElectiveGroup
-        elective = ElectiveGroup.objects.filter(term=term).first()
+        elective = ElectiveGroup.objects.filter(term=term, is_draft=False).first()
 
         # If deadline has passed and results not yet published, run matching algorithm automatically
         if elective and elective.is_deadline_passed and not elective.is_published:

@@ -97,6 +97,46 @@ export async function getElectives(params = {}) {
 }
 
 /**
+ * Fetch unfinished elective drafts for faculty.
+ */
+export async function getElectiveDrafts() {
+  const response = await api.get('/electives/', { params: { is_draft: 'true' } });
+  return response.data;
+}
+
+/**
+ * Fetch a single elective by ID (for restoring drafts or viewing details).
+ */
+export async function getElectiveById(id) {
+  const response = await api.get(`/electives/${id}/`);
+  return response.data;
+}
+
+/**
+ * Step 1: Save basic info & schedule (Title, Description, Deadline, Term).
+ */
+export async function saveElectiveStep1(data) {
+  const response = await api.post('/electives/save-step-1/', data);
+  return response.data;
+}
+
+/**
+ * Step 2: Save dynamic course list with individual seats and min CGPA.
+ */
+export async function saveElectiveStep2(id, data) {
+  const response = await api.post(`/electives/${id}/save-step-2/`, data);
+  return response.data;
+}
+
+/**
+ * Step 3: Save whole-elective criteria and optionally finalize.
+ */
+export async function saveElectiveStep3(id, data) {
+  const response = await api.post(`/electives/${id}/save-step-3/`, data);
+  return response.data;
+}
+
+/**
  * Create a new elective group with title, description, required deadline,
  * whole-elective criteria (sem, degree, branch, CGPA), and individual courses.
  */

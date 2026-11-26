@@ -7,12 +7,15 @@ class ElectiveGroup(models.Model):
     Represents an Elective Offering (basket/group) containing multiple courses.
     Whole-elective criteria: semester, degree, branch, general CGPA (all optional).
     Submission deadline is required.
+    Supports step-by-step multi-step creation and draft restoration.
     """
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     department = models.CharField(max_length=100, blank=True, default='')
     term = models.CharField(max_length=50, default='Fall 2026', db_index=True)
-    submission_deadline = models.DateTimeField()  # Required deadline
+    submission_deadline = models.DateTimeField(null=True, blank=True)  # Required on Step 1, nullable for intermediate drafts
+    is_draft = models.BooleanField(default=False, db_index=True)
+    current_step = models.PositiveSmallIntegerField(default=1)  # 1: Details, 2: Courses, 3: Criteria
     is_published = models.BooleanField(default=False)
     results_published_at = models.DateTimeField(null=True, blank=True)
 

@@ -323,6 +323,8 @@ class ElectiveGroupSerializer(serializers.ModelSerializer):
             'department',
             'term',
             'submission_deadline',
+            'is_draft',
+            'current_step',
             'is_published',
             'results_published_at',
             'is_deadline_passed',
@@ -350,6 +352,43 @@ class ElectiveGroupSerializer(serializers.ModelSerializer):
 
     def get_total_seats(self, obj) -> int:
         return sum(c.capacity for c in obj.courses.all())
+
+
+class ElectiveStep1Serializer(serializers.Serializer):
+    """Step 1: Title, Description, Submission Deadline (Required), Academic Term, Department."""
+    draft_id = serializers.IntegerField(required=False, allow_null=True)
+    title = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True, default='')
+    submission_deadline = serializers.DateTimeField(required=True)
+    term = serializers.CharField(required=False, default='Fall 2026')
+    department = serializers.CharField(required=False, allow_blank=True, default='Computer Science')
+
+
+class ElectiveStep2Serializer(serializers.Serializer):
+    """Step 2: Dynamic Course List (at least 2 courses) with Course Code, Course Name, Credits, individual Seats & Min CGPA."""
+    courses = CourseItemCreateSerializer(many=True, required=True)
+
+    def validate_courses(self, value):
+        if len(value) < 2:
+            raise serializers.ValidationError("At least 2 courses must be added to this elective.")
+        for idx, course in enumerate(value, start=1):
+            if not course.get('code', '').strip():
+                raise serializers.ValidationError(f"Course #{idx} must have a valid course code.")
+            if not course.get('title', '').strip():
+                raise serializers.ValidationError(f"Course #{idx} must have a valid course name.")
+            if not course.get('capacity') or course['capacity'] <= 0:
+                raise serializers.ValidationError(f"Course #{idx} must have a seat capacity greater than 0.")
+        return value
+
+
+class ElectiveStep3Serializer(serializers.Serializer):
+    """Step 3: Whole-Elective Criteria (Overall Min CGPA, Allowed Semesters, Target Degrees, Target Branches)."""
+    min_cgpa = serializers.FloatField(required=False, allow_null=True, min_value=0.0, max_value=10.0)
+    allowed_semesters = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
+    target_degrees = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    target_branches = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    max_preferences = serializers.IntegerField(required=False, default=5)
+    finalize = serializers.BooleanField(required=False, default=False)
 
 
 class ElectiveGroupCreateSerializer(serializers.Serializer):

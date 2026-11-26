@@ -29,6 +29,9 @@ from .serializers import (
     RegistrationWindowSerializer,
     ElectiveGroupSerializer,
     ElectiveGroupCreateSerializer,
+    ElectiveStep1Serializer,
+    ElectiveStep2Serializer,
+    ElectiveStep3Serializer,
 )
 from .services import (
     claim_seat_and_register,
@@ -79,14 +82,31 @@ class ElectiveGroupViewSet(viewsets.ModelViewSet):
     API endpoint for managing Elective Groups (Baskets) containing multiple courses.
     Allows faculty to define title, short description, required deadline, whole-elective criteria,
     and a list of individual courses with individual seat capacities and cutoffs.
+    Supports step-by-step drafting and draft restoration.
     """
     queryset = ElectiveGroup.objects.prefetch_related('courses__sections').all()
     serializer_class = ElectiveGroupSerializer
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy', 'publish']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'publish', 'save_step_1', 'save_step_2', 'save_step_3']:
             return [IsFacultyUser()]
         return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = ElectiveGroup.objects.prefetch_related('courses__sections').all()
+        if not getattr(user, 'is_faculty', False):
+            # Students only see active, finalized electives
+            return qs.filter(is_draft=False)
+
+        # Faculty can filter by draft status: ?is_draft=true or ?is_draft=false
+        is_draft_param = self.request.query_params.get('is_draft')
+        if is_draft_param is not None:
+            if is_draft_param.lower() in ['true', '1']:
+                return qs.filter(is_draft=True)
+            elif is_draft_param.lower() in ['false', '0']:
+                return qs.filter(is_draft=False)
+        return qs
 
     def create(self, request, *args, **kwargs):
         serializer = ElectiveGroupCreateSerializer(data=request.data)
@@ -103,6 +123,8 @@ class ElectiveGroupViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             elective = ElectiveGroup.objects.create(
                 instructor=user,
+                is_draft=False,
+                current_step=3,
                 **data
             )
 
@@ -139,6 +161,127 @@ class ElectiveGroupViewSet(viewsets.ModelViewSet):
                 )
 
         return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='save-step-1')
+    def save_step_1(self, request):
+        """Step 1: Save basic details (Title, Description, Required Deadline, Academic Term)."""
+        serializer = ElectiveStep1Serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        draft_id = data.pop('draft_id', None)
+        user = request.user if getattr(request.user, 'is_faculty', False) else None
+
+        if draft_id:
+            try:
+                elective = ElectiveGroup.objects.get(pk=draft_id)
+                for field, val in data.items():
+                    setattr(elective, field, val)
+                elective.current_step = max(elective.current_step, 1)
+                elective.save()
+            except ElectiveGroup.DoesNotExist:
+                return Response({'error': 'Draft not found.'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            elective = ElectiveGroup.objects.create(
+                instructor=user,
+                is_draft=True,
+                current_step=1,
+                **data
+            )
+
+        return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_200_OK if draft_id else status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='save-step-2')
+    def save_step_2(self, request, pk=None):
+        """Step 2: Save dynamic list of courses (at least 2 courses) with individual seats and min CGPA."""
+        elective = self.get_object()
+        serializer = ElectiveStep2Serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        courses_data = serializer.validated_data['courses']
+        user = request.user if getattr(request.user, 'is_faculty', False) else elective.instructor
+
+        with transaction.atomic():
+            # Cleanly replace draft courses for this elective
+            elective.courses.all().delete()
+
+            for c_data in courses_data:
+                course_code = c_data['code'].strip().upper()
+                capacity = c_data.get('capacity', 30)
+                course_min_cgpa = c_data.get('min_cgpa') or elective.min_cgpa
+
+                course = Course.objects.create(
+                    elective_group=elective,
+                    code=course_code,
+                    title=c_data['title'].strip(),
+                    credits=c_data.get('credits', 3),
+                    capacity=capacity,
+                    min_cgpa=course_min_cgpa,
+                    department=elective.department or 'Computer Science',
+                    submission_deadline=elective.submission_deadline,
+                    allowed_semesters=elective.allowed_semesters,
+                    target_degrees=elective.target_degrees,
+                    target_branches=elective.target_branches,
+                    max_preferences=elective.max_preferences,
+                    instructor=user,
+                )
+
+                Section.objects.create(
+                    course=course,
+                    section_number='01',
+                    term=elective.term,
+                    capacity=capacity,
+                    instructor_name=(user.get_full_name() or user.username) if user else "Faculty Instructor",
+                    status=Section.Status.OPEN,
+                )
+
+            elective.current_step = max(elective.current_step, 2)
+            elective.save(update_fields=['current_step'])
+
+        return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='save-step-3')
+    def save_step_3(self, request, pk=None):
+        """Step 3: Save whole-elective criteria (CGPA, Semesters, Degrees, Branches) and optionally finalize."""
+        elective = self.get_object()
+        serializer = ElectiveStep3Serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        finalize = data.pop('finalize', False)
+
+        for field, val in data.items():
+            setattr(elective, field, val)
+
+        elective.current_step = 3
+        if finalize:
+            if elective.courses.count() < 2:
+                return Response(
+                    {'error': 'An elective must contain at least 2 courses before being finalized.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not elective.submission_deadline:
+                return Response(
+                    {'error': 'A valid submission deadline is required.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            elective.is_draft = False
+
+        elective.save()
+
+        # Sync elective-level criteria down to its courses
+        elective.courses.update(
+            allowed_semesters=elective.allowed_semesters,
+            target_degrees=elective.target_degrees,
+            target_branches=elective.target_branches,
+            max_preferences=elective.max_preferences,
+            submission_deadline=elective.submission_deadline,
+        )
+
+        return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
