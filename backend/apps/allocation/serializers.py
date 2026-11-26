@@ -10,6 +10,8 @@ class ElectivePreferenceSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
     course_department = serializers.CharField(source='course.department', read_only=True)
     course_credits = serializers.IntegerField(source='course.credits', read_only=True)
+    elective_group_id = serializers.IntegerField(source='elective_group.id', read_only=True, default=None)
+    elective_title = serializers.CharField(source='elective_group.title', read_only=True, default=None)
 
     class Meta:
         model = ElectivePreference
@@ -17,6 +19,9 @@ class ElectivePreferenceSerializer(serializers.ModelSerializer):
             'id',
             'student_id',
             'student_name',
+            'elective_group',
+            'elective_group_id',
+            'elective_title',
             'course',
             'course_code',
             'course_title',

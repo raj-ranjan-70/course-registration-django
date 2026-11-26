@@ -3,7 +3,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 from accounts.models import Student
 from accounts.permissions import IsFacultyUser, IsStudentUser
@@ -219,37 +219,52 @@ class ElectivePreferenceViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_403_FORBIDDEN
                     )
 
-            with transaction.atomic():
-                # Replace existing preferences for this student for this elective / term
-                if elective_course_ids:
-                    ElectivePreference.objects.filter(student=student, course_id__in=elective_course_ids).delete()
-                else:
-                    ElectivePreference.objects.filter(student=student, term=term).delete()
+            try:
+                with transaction.atomic():
+                    # Replace existing preferences for this student for this elective / term
+                    if elective:
+                        ElectivePreference.objects.filter(student=student, elective_group=elective).delete()
+                        if elective_course_ids:
+                            ElectivePreference.objects.filter(student=student, course_id__in=elective_course_ids).delete()
+                    elif elective_course_ids:
+                        ElectivePreference.objects.filter(student=student, course_id__in=elective_course_ids).delete()
+                    else:
+                        ElectivePreference.objects.filter(student=student, term=term).delete()
 
-                prefs_to_create = [
-                    ElectivePreference(
-                        student=student,
-                        course_id=cid,
-                        preference_rank=idx + 1,
-                        term=term,
-                    )
-                    for idx, cid in enumerate(course_ids)
-                ]
-                ElectivePreference.objects.bulk_create(prefs_to_create)
+                    prefs_to_create = [
+                        ElectivePreference(
+                            student=student,
+                            course_id=cid,
+                            elective_group=elective,
+                            preference_rank=idx + 1,
+                            term=term,
+                        )
+                        for idx, cid in enumerate(course_ids)
+                    ]
+                    ElectivePreference.objects.bulk_create(prefs_to_create)
 
-            updated = (
-                ElectivePreference.objects.filter(student=student, term=term)
-                .select_related('course', 'student', 'student__user')
-                .order_by('preference_rank')
-            )
-            return Response(
-                {
-                    'status': 'success',
-                    'message': f"Saved {len(prefs_to_create)} ranked elective preferences.",
-                    'preferences': ElectivePreferenceSerializer(updated, many=True).data,
-                },
-                status=status.HTTP_201_CREATED
-            )
+                updated = (
+                    ElectivePreference.objects.filter(student=student, term=term)
+                    .select_related('course', 'student', 'student__user')
+                    .order_by('preference_rank')
+                )
+                return Response(
+                    {
+                        'status': 'success',
+                        'message': f"Saved {len(prefs_to_create)} ranked elective preferences.",
+                        'preferences': ElectivePreferenceSerializer(updated, many=True).data,
+                    },
+                    status=status.HTTP_201_CREATED
+                )
+            except IntegrityError as exc:
+                return Response(
+                    {
+                        'error': 'DuplicatePreferenceError',
+                        'detail': f"Preference ranking conflict: {str(exc)}",
+                        'code': 'PREFERENCE_RANK_CONFLICT',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Single preference creation
         course_id = request.data.get('course_id')

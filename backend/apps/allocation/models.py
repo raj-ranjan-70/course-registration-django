@@ -12,6 +12,13 @@ class ElectivePreference(models.Model):
         on_delete=models.CASCADE,
         related_name='elective_preferences'
     )
+    elective_group = models.ForeignKey(
+        'courses.ElectiveGroup',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='preferences'
+    )
     preference_rank = models.PositiveIntegerField()
     term = models.CharField(max_length=50, default='Fall 2026', db_index=True)
     submitted_at = models.DateTimeField(auto_now=True)
@@ -24,14 +31,25 @@ class ElectivePreference(models.Model):
                 name='unique_student_course_preference'
             ),
             models.UniqueConstraint(
-                fields=['student', 'preference_rank', 'term'],
-                name='unique_student_rank_preference'
+                fields=['student', 'elective_group', 'preference_rank', 'term'],
+                name='unique_student_elective_rank_preference'
             ),
             models.CheckConstraint(
                 condition=models.Q(preference_rank__gte=1),
                 name='preference_rank_gte_1'
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if not self.elective_group_id and self.course_id:
+            try:
+                from courses.models import Course
+                c = Course.objects.only('elective_group_id').filter(id=self.course_id).first()
+                if c and c.elective_group_id:
+                    self.elective_group_id = c.elective_group_id
+            except Exception:
+                pass
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.student.student_id} -> Rank {self.preference_rank}: {self.course.code} ({self.term})"

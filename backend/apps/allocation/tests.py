@@ -248,6 +248,62 @@ class AllocationRunAPITests(TestCase):
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(resp.json()['code'], 'DEADLINE_PASSED')
 
+    def test_multiple_electives_rank_preferences_without_conflict(self):
+        """A student can submit rank 1, 2 for Elective 1 and also rank 1, 2 for Elective 2 without rank constraint violations."""
+        from courses.models import ElectiveGroup
+        from django.utils import timezone
+        from datetime import timedelta
+
+        self.client.force_authenticate(user=self.s1.user)
+        future = timezone.now() + timedelta(days=5)
+
+        # Create Elective Group 1
+        el1 = ElectiveGroup.objects.create(
+            title='Elective Basket 1',
+            submission_deadline=future,
+            term='Fall 2026',
+            is_draft=False,
+        )
+        c1 = Course.objects.create(code='E1_C1', title='Course 1A', elective_group=el1, submission_deadline=future)
+        c2 = Course.objects.create(code='E1_C2', title='Course 1B', elective_group=el1, submission_deadline=future)
+
+        # Create Elective Group 2
+        el2 = ElectiveGroup.objects.create(
+            title='Elective Basket 2',
+            submission_deadline=future,
+            term='Fall 2026',
+            is_draft=False,
+        )
+        c3 = Course.objects.create(code='E2_C1', title='Course 2A', elective_group=el2, submission_deadline=future)
+        c4 = Course.objects.create(code='E2_C2', title='Course 2B', elective_group=el2, submission_deadline=future)
+
+        # Submit preferences for Elective 1 (Rank 1: c1, Rank 2: c2)
+        resp1 = self.client.post('/api/preferences/', {
+            'course_ids': [c1.id, c2.id],
+            'term': 'Fall 2026',
+            'student_id': self.s1.student_id,
+        }, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_201_CREATED)
+
+        # Submit preferences for Elective 2 (Rank 1: c3, Rank 2: c4)
+        resp2 = self.client.post('/api/preferences/', {
+            'course_ids': [c3.id, c4.id],
+            'term': 'Fall 2026',
+            'student_id': self.s1.student_id,
+        }, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_201_CREATED)
+
+        # Verify preferences in database
+        el1_prefs = ElectivePreference.objects.filter(student=self.s1, elective_group=el1).order_by('preference_rank')
+        self.assertEqual(el1_prefs.count(), 2)
+        self.assertEqual(el1_prefs[0].preference_rank, 1)
+        self.assertEqual(el1_prefs[0].course_id, c1.id)
+
+        el2_prefs = ElectivePreference.objects.filter(student=self.s1, elective_group=el2).order_by('preference_rank')
+        self.assertEqual(el2_prefs.count(), 2)
+        self.assertEqual(el2_prefs[0].preference_rank, 1)
+        self.assertEqual(el2_prefs[0].course_id, c3.id)
+
     def test_max_choices_exceeded(self):
         """Submitting more than 5 preference choices returns 400 error."""
         self.client.force_authenticate(user=self.s1.user)
