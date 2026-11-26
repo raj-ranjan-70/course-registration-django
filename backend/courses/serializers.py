@@ -373,9 +373,18 @@ class ElectiveStep2Serializer(serializers.Serializer):
     def validate_courses(self, value):
         if len(value) < 2:
             raise serializers.ValidationError("At least 2 courses must be added to this elective.")
+
+        seen_codes = set()
         for idx, course in enumerate(value, start=1):
-            if not course.get('code', '').strip():
+            code = course.get('code', '').strip().upper()
+            if not code:
                 raise serializers.ValidationError(f"Course #{idx} must have a valid course code.")
+            if code in seen_codes:
+                raise serializers.ValidationError(
+                    f"Duplicate course code '{code}' found in Course #{idx}. Each course in this elective must have a unique code."
+                )
+            seen_codes.add(code)
+
             if not course.get('title', '').strip():
                 raise serializers.ValidationError(f"Course #{idx} must have a valid course name.")
             if not course.get('capacity') or course['capacity'] <= 0:
@@ -407,4 +416,25 @@ class ElectiveGroupCreateSerializer(serializers.Serializer):
     max_preferences = serializers.IntegerField(required=False, default=5)
     allow_preference_editing = serializers.BooleanField(required=False, default=True)
     courses = CourseItemCreateSerializer(many=True, required=True)
+
+    def validate_courses(self, value):
+        if len(value) < 2:
+            raise serializers.ValidationError("At least 2 courses must be added to this elective.")
+
+        seen_codes = set()
+        for idx, course in enumerate(value, start=1):
+            code = course.get('code', '').strip().upper()
+            if not code:
+                raise serializers.ValidationError(f"Course #{idx} must have a valid course code.")
+            if code in seen_codes:
+                raise serializers.ValidationError(
+                    f"Duplicate course code '{code}' found in Course #{idx}. Each course in this elective must have a unique code."
+                )
+            seen_codes.add(code)
+
+            if not course.get('title', '').strip():
+                raise serializers.ValidationError(f"Course #{idx} must have a valid course name.")
+            if not course.get('capacity') or course['capacity'] <= 0:
+                raise serializers.ValidationError(f"Course #{idx} must have a seat capacity greater than 0.")
+        return value
 

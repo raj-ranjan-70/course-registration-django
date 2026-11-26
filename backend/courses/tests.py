@@ -541,3 +541,62 @@ class Phase2EligibilityEngineTests(TestCase):
         matching = [e for e in student_resp2.json() if e['id'] == draft_id]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]['title'], 'AI & Robotics Basket')
+
+    def test_course_code_reuse_across_different_electives(self):
+        """Course codes can be used across different electives without colliding."""
+        self.client.force_authenticate(user=self.faculty_user)
+        deadline = (timezone.now() + timedelta(days=5)).isoformat()
+
+        # Create Elective 1
+        resp1 = self.client.post('/api/electives/save-step-1/', {
+            'title': 'Track Alpha',
+            'submission_deadline': deadline,
+        }, format='json')
+        el1_id = resp1.json()['id']
+
+        # Save Step 2 on Elective 1 with CSE1 and CSE2
+        resp1_step2 = self.client.post(f'/api/electives/{el1_id}/save-step-2/', {
+            'courses': [
+                {'code': 'CSE1', 'title': 'Intro to CS', 'capacity': 40, 'credits': 3},
+                {'code': 'CSE2', 'title': 'Data Structures', 'capacity': 40, 'credits': 3},
+            ]
+        }, format='json')
+        self.assertEqual(resp1_step2.status_code, status.HTTP_200_OK)
+
+        # Create Elective 2
+        resp2 = self.client.post('/api/electives/save-step-1/', {
+            'title': 'Track Beta',
+            'submission_deadline': deadline,
+        }, format='json')
+        el2_id = resp2.json()['id']
+
+        # Save Step 2 on Elective 2 also using CSE1 and CSE2
+        resp2_step2 = self.client.post(f'/api/electives/{el2_id}/save-step-2/', {
+            'courses': [
+                {'code': 'CSE1', 'title': 'Advanced CS', 'capacity': 30, 'credits': 3},
+                {'code': 'CSE2', 'title': 'Advanced DS', 'capacity': 30, 'credits': 3},
+            ]
+        }, format='json')
+        self.assertEqual(resp2_step2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp2_step2.json()['courses']), 2)
+
+    def test_duplicate_course_code_within_same_elective_rejected(self):
+        """Duplicate course codes within the same elective must be rejected with 400 Bad Request."""
+        self.client.force_authenticate(user=self.faculty_user)
+        deadline = (timezone.now() + timedelta(days=5)).isoformat()
+
+        resp = self.client.post('/api/electives/save-step-1/', {
+            'title': 'Duplicate Test Track',
+            'submission_deadline': deadline,
+        }, format='json')
+        el_id = resp.json()['id']
+
+        # Attempt to save duplicate course code CSE1 twice in the same elective
+        dup_resp = self.client.post(f'/api/electives/{el_id}/save-step-2/', {
+            'courses': [
+                {'code': 'CSE1', 'title': 'Course A', 'capacity': 30, 'credits': 3},
+                {'code': 'CSE1', 'title': 'Course B', 'capacity': 30, 'credits': 3},
+            ]
+        }, format='json')
+        self.assertEqual(dup_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Duplicate course code', str(dup_resp.json()))

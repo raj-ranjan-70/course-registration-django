@@ -7,7 +7,7 @@ from rest_framework.exceptions import PermissionDenied
 from django.db.models import Q
 from accounts.models import Student, User, Cohort
 from accounts.permissions import IsFacultyUser, IsStudentUser
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 from .models import (
     ElectiveGroup,
@@ -211,44 +211,54 @@ class ElectiveGroupViewSet(viewsets.ModelViewSet):
         courses_data = serializer.validated_data['courses']
         user = request.user if getattr(request.user, 'is_faculty', False) else elective.instructor
 
-        with transaction.atomic():
-            # Cleanly replace draft courses for this elective
-            elective.courses.all().delete()
+        try:
+            with transaction.atomic():
+                # Cleanly replace draft courses for this elective
+                elective.courses.all().delete()
 
-            for c_data in courses_data:
-                course_code = c_data['code'].strip().upper()
-                capacity = c_data.get('capacity', 30)
-                course_min_cgpa = c_data.get('min_cgpa') or elective.min_cgpa
+                for c_data in courses_data:
+                    course_code = c_data['code'].strip().upper()
+                    capacity = c_data.get('capacity', 30)
+                    course_min_cgpa = c_data.get('min_cgpa') or elective.min_cgpa
 
-                course = Course.objects.create(
-                    elective_group=elective,
-                    code=course_code,
-                    title=c_data['title'].strip(),
-                    credits=c_data.get('credits', 3),
-                    capacity=capacity,
-                    min_cgpa=course_min_cgpa,
-                    department=elective.department or 'Computer Science',
-                    submission_deadline=elective.submission_deadline,
-                    allowed_semesters=elective.allowed_semesters,
-                    target_degrees=elective.target_degrees,
-                    target_branches=elective.target_branches,
-                    max_preferences=elective.max_preferences,
-                    instructor=user,
-                )
+                    course = Course.objects.create(
+                        elective_group=elective,
+                        code=course_code,
+                        title=c_data['title'].strip(),
+                        credits=c_data.get('credits', 3),
+                        capacity=capacity,
+                        min_cgpa=course_min_cgpa,
+                        department=elective.department or 'Computer Science',
+                        submission_deadline=elective.submission_deadline,
+                        allowed_semesters=elective.allowed_semesters,
+                        target_degrees=elective.target_degrees,
+                        target_branches=elective.target_branches,
+                        max_preferences=elective.max_preferences,
+                        instructor=user,
+                    )
 
-                Section.objects.create(
-                    course=course,
-                    section_number='01',
-                    term=elective.term,
-                    capacity=capacity,
-                    instructor_name=(user.get_full_name() or user.username) if user else "Faculty Instructor",
-                    status=Section.Status.OPEN,
-                )
+                    Section.objects.create(
+                        course=course,
+                        section_number='01',
+                        term=elective.term,
+                        capacity=capacity,
+                        instructor_name=(user.get_full_name() or user.username) if user else "Faculty Instructor",
+                        status=Section.Status.OPEN,
+                    )
 
-            elective.current_step = max(elective.current_step, 2)
-            elective.save(update_fields=['current_step'])
+                elective.current_step = max(elective.current_step, 2)
+                elective.save(update_fields=['current_step'])
 
-        return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_200_OK)
+            return Response(ElectiveGroupSerializer(elective).data, status=status.HTTP_200_OK)
+        except IntegrityError as exc:
+            return Response(
+                {
+                    'error': 'DuplicateCourseError',
+                    'detail': f"Course code uniqueness violation: {str(exc)}",
+                    'code': 'DUPLICATE_COURSE_CODE',
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     @action(detail=True, methods=['post'], url_path='save-step-3')
     def save_step_3(self, request, pk=None):
