@@ -69,7 +69,11 @@ export default function FacultyDashboard() {
   const [allocationRuns, setAllocationRuns] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
   const [publishingId, setPublishingId] = useState(null);
+
+  // Toast feedback state: vanishes automatically after 2000ms
   const [feedback, setFeedback] = useState(null); // { type: 'success' | 'error', message: '' }
+  // Field-level error highlighting state
+  const [fieldErrors, setFieldErrors] = useState({});
 
   // Multi-step Wizard State
   const [wizardStep, setWizardStep] = useState(1); // 1: Details & Schedule | 2: Courses | 3: Whole Criteria
@@ -108,6 +112,16 @@ export default function FacultyDashboard() {
   ];
   const availableSemesters = [3, 4, 5, 6, 7, 8];
 
+  // Auto-vanish toast feedback after 2 seconds
+  useEffect(() => {
+    if (feedback) {
+      const timer = setTimeout(() => {
+        setFeedback(null);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [feedback]);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -137,17 +151,41 @@ export default function FacultyDashboard() {
   useEffect(() => {
     const savedDraftId = localStorage.getItem(DRAFT_STORAGE_KEY);
     if (savedDraftId && !draftId) {
-      // Auto-restore draft from ID
       handleResumeDraft(Number(savedDraftId), false);
     }
   }, []);
 
-  // Course list handlers in Step 2
+  // Helper to clear specific field error when user edits
+  const clearFieldError = (key) => {
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  // Course list handlers in Step 2: PREPENDS AT TOP (Bottom to Top order)
   const handleAddCourseRow = () => {
     setElectiveForm((prev) => ({
       ...prev,
-      courses: [...prev.courses, { code: '', title: '', credits: 3, capacity: 30, minCgpa: '' }],
+      courses: [
+        { code: '', title: '', credits: 3, capacity: 30, minCgpa: '' },
+        ...prev.courses,
+      ],
     }));
+    // Reset course index field errors since items shifted
+    setFieldErrors((prev) => {
+      const next = {};
+      Object.keys(prev).forEach((k) => {
+        if (!k.startsWith('course_')) {
+          next[k] = prev[k];
+        }
+      });
+      return next;
+    });
+    setFeedback({ type: 'success', message: 'New course added at the top of the pool.' });
   };
 
   const handleRemoveCourseRow = (index) => {
@@ -162,9 +200,11 @@ export default function FacultyDashboard() {
       ...prev,
       courses: prev.courses.filter((_, i) => i !== index),
     }));
+    setFieldErrors({});
   };
 
   const handleCourseFieldChange = (index, field, value) => {
+    clearFieldError(`course_${index}_${field}`);
     setElectiveForm((prev) => {
       const updated = [...prev.courses];
       updated[index] = { ...updated[index], [field]: value };
@@ -214,6 +254,7 @@ export default function FacultyDashboard() {
     setDraftId(null);
     setWizardStep(1);
     setLastSavedTime(null);
+    setFieldErrors({});
     localStorage.removeItem(DRAFT_STORAGE_KEY);
     setElectiveForm({
       title: '',
@@ -279,6 +320,7 @@ export default function FacultyDashboard() {
       });
 
       setDraftId(draft.id);
+      setFieldErrors({});
       localStorage.setItem(DRAFT_STORAGE_KEY, String(draft.id));
       setLastSavedTime(new Date(draft.updated_at).toLocaleTimeString());
       setWizardStep(draft.current_step || 1);
@@ -299,12 +341,21 @@ export default function FacultyDashboard() {
   // STEP 1: Save Step 1 (Title, Description, Deadline, Term)
   const handleSaveStep1 = async (advanceToStep2 = true) => {
     setFeedback(null);
+    const newErrors = {};
+
     if (!electiveForm.title.trim()) {
-      setFeedback({ type: 'error', message: 'Step 1: Elective Title is required.' });
-      return false;
+      newErrors.title = true;
     }
     if (!electiveForm.submissionDeadline) {
-      setFeedback({ type: 'error', message: 'Step 1: Submission Deadline is required.' });
+      newErrors.submissionDeadline = true;
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setFieldErrors(newErrors);
+      setFeedback({
+        type: 'error',
+        message: 'Please fill in the required fields (highlighted in red).',
+      });
       return false;
     }
 
@@ -321,6 +372,7 @@ export default function FacultyDashboard() {
 
       const result = await saveElectiveStep1(payload);
       setDraftId(result.id);
+      setFieldErrors({});
       localStorage.setItem(DRAFT_STORAGE_KEY, String(result.id));
       setLastSavedTime(new Date().toLocaleTimeString());
       await loadData();
@@ -329,12 +381,12 @@ export default function FacultyDashboard() {
         setWizardStep(2);
         setFeedback({
           type: 'success',
-          message: 'Step 1 saved! Now add the list of courses (at least 2 required).',
+          message: 'Step 1 saved! Add at least 2 courses in Step 2.',
         });
       } else {
         setFeedback({
           type: 'success',
-          message: `Draft "${result.title}" saved at Step 1. You can resume anytime from Drafts.`,
+          message: `Draft "${result.title}" saved at Step 1.`,
         });
       }
       return true;
@@ -349,12 +401,12 @@ export default function FacultyDashboard() {
   // STEP 2: Save Step 2 (Dynamic courses list - at least 2 courses)
   const handleSaveStep2 = async (advanceToStep3 = true) => {
     setFeedback(null);
+    const newErrors = {};
 
-    // Validate courses: at least 2 courses
     if (electiveForm.courses.length < 2) {
       setFeedback({
         type: 'error',
-        message: 'Step 2 requires at least 2 courses so students can rank their preferences.',
+        message: 'Step 2 requires at least 2 courses for students to rank preferences.',
       });
       return false;
     }
@@ -362,30 +414,26 @@ export default function FacultyDashboard() {
     for (let i = 0; i < electiveForm.courses.length; i++) {
       const c = electiveForm.courses[i];
       if (!c.code.trim()) {
-        setFeedback({
-          type: 'error',
-          message: `Course #${i + 1} is missing a Course Code (e.g. CS501).`,
-        });
-        return false;
+        newErrors[`course_${i}_code`] = true;
       }
       if (!c.title.trim()) {
-        setFeedback({
-          type: 'error',
-          message: `Course #${i + 1} (${c.code}) is missing a Course Name.`,
-        });
-        return false;
+        newErrors[`course_${i}_title`] = true;
       }
       if (!c.capacity || Number(c.capacity) <= 0) {
-        setFeedback({
-          type: 'error',
-          message: `Course #${i + 1} (${c.code}) must specify a seat capacity > 0.`,
-        });
-        return false;
+        newErrors[`course_${i}_capacity`] = true;
       }
     }
 
+    if (Object.keys(newErrors).length > 0) {
+      setFieldErrors(newErrors);
+      setFeedback({
+        type: 'error',
+        message: 'Please complete all highlighted course fields (Code, Name, Capacity > 0).',
+      });
+      return false;
+    }
+
     if (!draftId) {
-      // Must save Step 1 first if draftId missing
       const s1Ok = await handleSaveStep1(false);
       if (!s1Ok) return false;
     }
@@ -403,6 +451,7 @@ export default function FacultyDashboard() {
       };
 
       const result = await saveElectiveStep2(draftId, payload);
+      setFieldErrors({});
       setLastSavedTime(new Date().toLocaleTimeString());
       await loadData();
 
@@ -415,7 +464,7 @@ export default function FacultyDashboard() {
       } else {
         setFeedback({
           type: 'success',
-          message: `Draft courses saved (${result.courses?.length || 0} courses). You can resume anytime from Drafts.`,
+          message: `Draft courses saved (${result.courses?.length || 0} courses).`,
         });
       }
       return true;
@@ -448,6 +497,7 @@ export default function FacultyDashboard() {
       };
 
       const result = await saveElectiveStep3(draftId, payload);
+      setFieldErrors({});
       setLastSavedTime(new Date().toLocaleTimeString());
 
       if (finalize) {
@@ -456,7 +506,7 @@ export default function FacultyDashboard() {
         setActiveTab('electives');
         setFeedback({
           type: 'success',
-          message: `Elective "${result.title}" with ${result.courses?.length || 0} courses finalized & launched for students!`,
+          message: `Elective "${result.title}" with ${result.courses?.length || 0} courses launched successfully!`,
         });
       } else {
         await loadData();
@@ -482,7 +532,7 @@ export default function FacultyDashboard() {
       const response = await publishElectiveGroup(electiveId);
       setFeedback({
         type: 'success',
-        message: `Matching algorithm automatically executed and results published for "${response.elective?.title}"!`,
+        message: `Matching algorithm executed and results published for "${response.elective?.title}"!`,
       });
       if (response.allocation_run) {
         setSelectedRun(response.allocation_run);
@@ -518,7 +568,38 @@ export default function FacultyDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9F8F6] text-[#192A24] flex flex-col font-sans selection:bg-[#1B4D3E] selection:text-white">
+    <div className="min-h-screen bg-[#F9F8F6] text-[#192A24] flex flex-col font-sans selection:bg-[#1B4D3E] selection:text-white relative">
+      {/* FLOATING TOAST NOTIFICATION: Automatically vanishes after 2 seconds */}
+      {feedback && (
+        <div className="fixed top-5 right-5 z-50 max-w-md w-full sm:w-auto animate-in fade-in slide-in-from-top-3 duration-200">
+          <div
+            className={`p-4 rounded-xl shadow-xl border flex items-start gap-3 backdrop-blur-md ${
+              feedback.type === 'success'
+                ? 'bg-emerald-50/95 border-emerald-300 text-emerald-950'
+                : 'bg-red-50/95 border-red-300 text-red-950'
+            }`}
+          >
+            {feedback.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
+            )}
+            <div className="flex-1">
+              <span className="font-bold text-xs uppercase tracking-wider block">
+                {feedback.type === 'success' ? 'Success' : 'Notice / Error'}
+              </span>
+              <p className="text-xs mt-0.5 font-medium leading-relaxed">{feedback.message}</p>
+            </div>
+            <button
+              onClick={() => setFeedback(null)}
+              className="text-stone-400 hover:text-stone-700 text-base cursor-pointer p-0.5 leading-none"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Header */}
       <header className="border-b border-[#E5E0D8] bg-[#F9F8F6]/95 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
@@ -619,36 +700,7 @@ export default function FacultyDashboard() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-        {/* Banner Feedback Toast */}
-        {feedback && (
-          <div
-            className={`mb-6 p-4 rounded-xl text-sm flex items-start gap-3 border ${
-              feedback.type === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-red-50 border-red-200 text-red-900'
-            }`}
-          >
-            {feedback.type === 'success' ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
-            )}
-            <div className="flex-1">
-              <span className="font-semibold">
-                {feedback.type === 'success' ? 'Success' : 'Error'}
-              </span>
-              <p className="text-xs mt-0.5">{feedback.message}</p>
-            </div>
-            <button
-              onClick={() => setFeedback(null)}
-              className="text-stone-400 hover:text-stone-600 text-xs cursor-pointer"
-            >
-              &times;
-            </button>
-          </div>
-        )}
-
-        {/* RESTORE PROMPT BANNER (if active draft exists in background while on other tabs) */}
+        {/* Restore Prompt Banner on other tabs */}
         {draftId && activeTab !== 'create' && (
           <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
             <div className="flex items-center gap-2.5">
@@ -1083,628 +1135,224 @@ export default function FacultyDashboard() {
           </div>
         )}
 
-        {/* TAB 3: MULTI-STEP CREATE ELECTIVE WIZARD */}
+        {/* TAB 3: STEP-BY-STEP CREATE ELECTIVE WIZARD (Vertical Stepper on Left + Top-Left Actions) */}
         {activeTab === 'create' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            {/* Top Wizard Navigation Card */}
-            <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* VERTICAL STEP COUNTER (LEFT SIDE OF SCREEN) */}
+            <div className="lg:col-span-3 lg:sticky lg:top-24 space-y-4">
+              <div className="bg-white rounded-2xl border border-[#E5E0D8] p-5 shadow-xs space-y-5">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#E8F5E9] text-[#1B4D3E] border border-[#C8E6C9]">
-                      <PlusCircle className="w-3.5 h-3.5" />
-                      Step-by-Step Elective Wizard
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8F5E9] text-[#1B4D3E] border border-[#C8E6C9]">
+                      Wizard Stepper
                     </span>
                     {draftId && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                        Draft #{draftId} Active
+                      <span className="text-[10px] font-mono text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        Draft #{draftId}
                       </span>
                     )}
                   </div>
-                  <h2 className="text-xl font-bold tracking-tight text-[#192A24] mt-1">
-                    {wizardStep === 1 && 'Step 1: Title, Description & Schedule'}
-                    {wizardStep === 2 && 'Step 2: Course Pool & Individual Seats'}
-                    {wizardStep === 3 && 'Step 3: Whole-Elective Criteria & Launch'}
-                  </h2>
+                  <h3 className="font-bold text-sm text-[#192A24] mt-2">
+                    Elective Creation
+                  </h3>
+                  <p className="text-[11px] text-stone-500 mt-0.5">
+                    Step {wizardStep} of 3
+                  </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* Vertical Steps List */}
+                <div className="space-y-2 relative">
+                  {/* Step 1 Vertical Item */}
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(1)}
+                    className={`w-full p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
+                      wizardStep === 1
+                        ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E] shadow-2xs font-semibold'
+                        : draftId
+                        ? 'bg-white border-[#E0DCD3] text-stone-700 hover:border-[#1B4D3E]/50'
+                        : 'bg-stone-50 border-stone-200 text-stone-400'
+                    }`}
+                  >
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                        wizardStep === 1
+                          ? 'bg-[#1B4D3E] text-white'
+                          : draftId
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-stone-200 text-stone-600'
+                      }`}
+                    >
+                      1
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold leading-tight">Step 1</div>
+                      <div className="text-[11px] text-stone-500 truncate">
+                        Title &amp; Deadline
+                      </div>
+                    </div>
+                    {wizardStep === 1 && (
+                      <div className="w-1.5 h-4 rounded-full bg-[#1B4D3E]" />
+                    )}
+                  </button>
+
+                  {/* Step 2 Vertical Item */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftId || electiveForm.title.trim()) {
+                        setWizardStep(2);
+                      } else {
+                        setFieldErrors({ title: true });
+                        setFeedback({ type: 'error', message: 'Complete Step 1 title and deadline first.' });
+                      }
+                    }}
+                    className={`w-full p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
+                      wizardStep === 2
+                        ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E] shadow-2xs font-semibold'
+                        : draftId && electiveForm.courses.length >= 2
+                        ? 'bg-white border-[#E0DCD3] text-stone-700 hover:border-[#1B4D3E]/50'
+                        : 'bg-stone-50 border-stone-200 text-stone-400'
+                    }`}
+                  >
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                        wizardStep === 2
+                          ? 'bg-[#1B4D3E] text-white'
+                          : draftId && electiveForm.courses.length >= 2
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-stone-200 text-stone-600'
+                      }`}
+                    >
+                      2
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold leading-tight flex items-center justify-between">
+                        <span>Step 2</span>
+                        <span className="text-[10px] font-normal text-stone-500">
+                          {electiveForm.courses.length} courses
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-stone-500 truncate">
+                        Course Pool (&ge; 2)
+                      </div>
+                    </div>
+                    {wizardStep === 2 && (
+                      <div className="w-1.5 h-4 rounded-full bg-[#1B4D3E]" />
+                    )}
+                  </button>
+
+                  {/* Step 3 Vertical Item */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftId && electiveForm.courses.length >= 2) {
+                        setWizardStep(3);
+                      } else {
+                        setFeedback({
+                          type: 'error',
+                          message: 'Complete Step 1 and at least 2 courses in Step 2 first.',
+                        });
+                      }
+                    }}
+                    className={`w-full p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-3 ${
+                      wizardStep === 3
+                        ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E] shadow-2xs font-semibold'
+                        : 'bg-stone-50 border-stone-200 text-stone-400'
+                    }`}
+                  >
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                        wizardStep === 3
+                          ? 'bg-[#1B4D3E] text-white'
+                          : 'bg-stone-200 text-stone-600'
+                      }`}
+                    >
+                      3
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold leading-tight">Step 3</div>
+                      <div className="text-[11px] text-stone-500 truncate">
+                        Criteria &amp; Launch
+                      </div>
+                    </div>
+                    {wizardStep === 3 && (
+                      <div className="w-1.5 h-4 rounded-full bg-[#1B4D3E]" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Left sidebar footer */}
+                <div className="pt-3 border-t border-[#EFECE6] space-y-2">
                   {lastSavedTime && (
-                    <span className="text-[11px] text-stone-500 hidden md:inline">
-                      Saved at {lastSavedTime}
-                    </span>
+                    <div className="text-[11px] text-stone-500 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-stone-400" />
+                      <span>Auto-saved at {lastSavedTime}</span>
+                    </div>
                   )}
                   {draftId && (
                     <button
                       type="button"
                       onClick={handleResetWizard}
-                      className="px-3 py-1.5 rounded-xl border border-[#E0DCD3] bg-white text-stone-600 hover:bg-[#F3F1EC] text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                      className="w-full py-2 rounded-xl border border-[#E0DCD3] bg-white text-stone-600 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                       title="Clear active draft and start from scratch"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Start Fresh
+                      Discard &amp; Start Fresh
                     </button>
                   )}
                 </div>
               </div>
-
-              {/* Progress Steps Header */}
-              <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-2 border-t border-[#EFECE6]">
-                {/* Step 1 Pill */}
-                <button
-                  type="button"
-                  onClick={() => setWizardStep(1)}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center gap-2.5 ${
-                    wizardStep === 1
-                      ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E]'
-                      : draftId
-                      ? 'bg-white border-[#E0DCD3] text-stone-700 hover:border-[#1B4D3E]/50'
-                      : 'bg-stone-50 border-stone-200 text-stone-400 opacity-80'
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                      wizardStep === 1
-                        ? 'bg-[#1B4D3E] text-white'
-                        : draftId
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-stone-200 text-stone-600'
-                    }`}
-                  >
-                    1
-                  </div>
-                  <div>
-                    <span className="block text-xs font-bold leading-tight">Step 1</span>
-                    <span className="text-[11px] text-stone-500 hidden sm:inline">
-                      Title &amp; Deadline
-                    </span>
-                  </div>
-                </button>
-
-                {/* Step 2 Pill */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (draftId || electiveForm.title.trim()) {
-                      setWizardStep(2);
-                    } else {
-                      setFeedback({ type: 'error', message: 'Complete Step 1 title and deadline first.' });
-                    }
-                  }}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center gap-2.5 ${
-                    wizardStep === 2
-                      ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E]'
-                      : draftId && electiveForm.courses.length >= 2
-                      ? 'bg-white border-[#E0DCD3] text-stone-700 hover:border-[#1B4D3E]/50'
-                      : 'bg-stone-50 border-stone-200 text-stone-400'
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                      wizardStep === 2
-                        ? 'bg-[#1B4D3E] text-white'
-                        : draftId && electiveForm.courses.length >= 2
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-stone-200 text-stone-600'
-                    }`}
-                  >
-                    2
-                  </div>
-                  <div>
-                    <span className="block text-xs font-bold leading-tight">Step 2</span>
-                    <span className="text-[11px] text-stone-500 hidden sm:inline">
-                      Courses Pool (&ge; 2)
-                    </span>
-                  </div>
-                </button>
-
-                {/* Step 3 Pill */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (draftId && electiveForm.courses.length >= 2) {
-                      setWizardStep(3);
-                    } else {
-                      setFeedback({
-                        type: 'error',
-                        message: 'Complete Step 1 and add at least 2 courses in Step 2 first.',
-                      });
-                    }
-                  }}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center gap-2.5 ${
-                    wizardStep === 3
-                      ? 'bg-[#E8F5E9] border-[#1B4D3E] text-[#1B4D3E]'
-                      : 'bg-stone-50 border-stone-200 text-stone-400'
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                      wizardStep === 3
-                        ? 'bg-[#1B4D3E] text-white'
-                        : 'bg-stone-200 text-stone-600'
-                    }`}
-                  >
-                    3
-                  </div>
-                  <div>
-                    <span className="block text-xs font-bold leading-tight">Step 3</span>
-                    <span className="text-[11px] text-stone-500 hidden sm:inline">
-                      Criteria &amp; Launch
-                    </span>
-                  </div>
-                </button>
-              </div>
             </div>
 
-            {/* STEP 1 CONTAINER: Title, Description, Submission Deadline, Academic Term */}
-            {wizardStep === 1 && (
-              <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
-                <div>
-                  <h3 className="text-base font-bold text-[#192A24]">
-                    Step 1: General Details &amp; Submission Deadline
-                  </h3>
-                  <p className="text-xs text-stone-600 mt-1">
-                    Name this elective offering, describe the syllabus track, set the required deadline, and define the academic term.
-                  </p>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
-                      Elective Title *
-                    </label>
-                    <input
-                      type="text"
-                      value={electiveForm.title}
-                      onChange={(e) => setElectiveForm({ ...electiveForm, title: e.target.value })}
-                      placeholder="e.g. Professional Elective Basket - Fall 2026"
-                      className="w-full px-3.5 py-2.5 bg-[#FAF9F7] border border-[#E0DCD3] rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#1B4D3E]/20 focus:border-[#1B4D3E]"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
-                      Short Description
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={electiveForm.description}
-                      onChange={(e) =>
-                        setElectiveForm({ ...electiveForm, description: e.target.value })
-                      }
-                      placeholder="Brief overview and scope of this elective basket for students..."
-                      className="w-full px-3.5 py-2.5 bg-[#FAF9F7] border border-[#E0DCD3] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#1B4D3E]/20 focus:border-[#1B4D3E]"
-                    />
-                  </div>
-
-                  {/* Submission Deadline & Term */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-amber-50/70 border border-amber-200">
-                    <div>
-                      <label className="block text-xs font-bold text-amber-900 uppercase tracking-wider mb-1">
-                        Submission Deadline * <span className="text-xs font-normal text-amber-700">(Required)</span>
-                      </label>
-                      <input
-                        type="datetime-local"
-                        value={electiveForm.submissionDeadline}
-                        onChange={(e) =>
-                          setElectiveForm({ ...electiveForm, submissionDeadline: e.target.value })
-                        }
-                        className="w-full px-3.5 py-2 bg-white border border-amber-300 rounded-xl text-sm font-semibold focus:outline-none focus:border-[#1B4D3E]"
-                        required
-                      />
-                      <p className="text-[11px] text-amber-800 mt-1">
-                        The matching algorithm will automatically execute before publishing results once this deadline expires.
-                      </p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1">
-                          Academic Term
-                        </label>
-                        <input
-                          type="text"
-                          value={electiveForm.term}
-                          onChange={(e) => setElectiveForm({ ...electiveForm, term: e.target.value })}
-                          className="w-full px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm font-semibold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1">
-                          Department
-                        </label>
-                        <input
-                          type="text"
-                          value={electiveForm.department}
-                          onChange={(e) =>
-                            setElectiveForm({ ...electiveForm, department: e.target.value })
-                          }
-                          className="w-full px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm font-semibold"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Step 1 Actions */}
-                <div className="flex items-center justify-between pt-4 border-t border-[#EFECE6]">
-                  <button
-                    type="button"
-                    onClick={() => handleSaveStep1(false)}
-                    disabled={savingStep}
-                    className="px-4 py-2 rounded-xl border border-[#E0DCD3] text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    Save Draft &amp; Exit
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSaveStep1(true)}
-                    disabled={savingStep}
-                    className="px-6 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {savingStep ? (
-                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <span>Continue to Step 2: Course List</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* STEP 2 CONTAINER: List of courses (at least 2 courses) with individual seats & min CGPA */}
-            {wizardStep === 2 && (
-              <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold text-[#192A24]">
-                        Step 2: Courses in this Elective
-                      </h3>
-                      <span
-                        className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                          electiveForm.courses.length >= 2
-                            ? 'bg-[#E8F5E9] text-[#1B4D3E] border-[#C8E6C9]'
-                            : 'bg-red-50 text-red-700 border-red-200'
-                        }`}
-                      >
-                        {electiveForm.courses.length >= 2
-                          ? `${electiveForm.courses.length} Courses Added`
-                          : `${electiveForm.courses.length} of 2 Minimum Courses`}
-                      </span>
-                    </div>
-                    <p className="text-xs text-stone-600 mt-1">
-                      Add at least 2 courses for students to rank. Each course specifies its own Course Code, Name, Credits, individual Seat Cap, and individual Min CGPA.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleAddCourseRow}
-                    className="px-3.5 py-2 rounded-xl bg-white border border-[#1B4D3E] text-[#1B4D3E] hover:bg-[#1B4D3E] hover:text-white transition-all text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs self-start sm:self-auto"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    + Add Course
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {electiveForm.courses.map((course, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-xl bg-[#FAF9F7] border border-[#E5E0D8] shadow-2xs relative space-y-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-[#1B4D3E] flex items-center gap-1.5">
-                          <BookOpen className="w-3.5 h-3.5" />
-                          Course #{idx + 1}
-                        </span>
-                        {electiveForm.courses.length > 2 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCourseRow(idx)}
-                            className="text-stone-400 hover:text-red-600 p-1 rounded cursor-pointer transition-colors"
-                            title="Remove course"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                        <div className="sm:col-span-3">
-                          <label className="block text-[11px] font-semibold text-stone-600 mb-1">
-                            Course Code *
-                          </label>
-                          <input
-                            type="text"
-                            value={course.code}
-                            onChange={(e) => handleCourseFieldChange(idx, 'code', e.target.value)}
-                            placeholder="e.g. CS501"
-                            className="w-full px-3 py-1.5 bg-white border border-[#E0DCD3] rounded-lg text-xs font-mono uppercase font-bold focus:border-[#1B4D3E] focus:outline-none"
-                            required
-                          />
-                        </div>
-
-                        <div className="sm:col-span-5">
-                          <label className="block text-[11px] font-semibold text-stone-600 mb-1">
-                            Course Name *
-                          </label>
-                          <input
-                            type="text"
-                            value={course.title}
-                            onChange={(e) => handleCourseFieldChange(idx, 'title', e.target.value)}
-                            placeholder="e.g. Machine Learning &amp; Deep Systems"
-                            className="w-full px-3 py-1.5 bg-white border border-[#E0DCD3] rounded-lg text-xs font-medium focus:border-[#1B4D3E] focus:outline-none"
-                            required
-                          />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                          <label className="block text-[11px] font-semibold text-stone-600 mb-1">
-                            Credits
-                          </label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="8"
-                            value={course.credits}
-                            onChange={(e) => handleCourseFieldChange(idx, 'credits', e.target.value)}
-                            className="w-full px-3 py-1.5 bg-white border border-[#E0DCD3] rounded-lg text-xs focus:border-[#1B4D3E] focus:outline-none"
-                          />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                          <label className="block text-[11px] font-semibold text-stone-600 mb-1">
-                            Seats (Cap) *
-                          </label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="500"
-                            value={course.capacity}
-                            onChange={(e) => handleCourseFieldChange(idx, 'capacity', e.target.value)}
-                            className="w-full px-3 py-1.5 bg-white border border-[#E0DCD3] rounded-lg text-xs font-bold text-[#1B4D3E] focus:border-[#1B4D3E] focus:outline-none"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      {/* Course specific CGPA */}
-                      <div className="pt-2 border-t border-[#EFECE6] flex items-center gap-3">
-                        <label className="text-[11px] font-semibold text-stone-600 shrink-0">
-                          Course Min CGPA <span className="text-stone-400 font-normal">(Individual cutoff):</span>
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="10"
-                          placeholder="e.g. 7.50 (or leave blank)"
-                          value={course.minCgpa}
-                          onChange={(e) => handleCourseFieldChange(idx, 'minCgpa', e.target.value)}
-                          className="w-36 px-2.5 py-1 bg-white border border-[#E0DCD3] rounded-lg text-xs focus:border-[#1B4D3E] focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Step 2 Actions */}
-                <div className="flex items-center justify-between pt-4 border-t border-[#EFECE6]">
-                  <button
-                    type="button"
-                    onClick={() => setWizardStep(1)}
-                    className="px-4 py-2 rounded-xl border border-[#E0DCD3] text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Back to Step 1
-                  </button>
-
-                  <div className="flex items-center gap-2">
+            {/* MAIN FORM AREA (RIGHT COLUMN) */}
+            <div className="lg:col-span-9 space-y-6">
+              {/* UPPER LEFT ACTION CONTROLS (User does not need to scroll down to save or continue!) */}
+              <div className="bg-white rounded-2xl border border-[#E5E0D8] p-4 sm:p-5 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  {/* Primary Save & Continue to Next Step Button on UPPER-LEFT */}
+                  {wizardStep === 1 && (
                     <button
                       type="button"
-                      onClick={() => handleSaveStep2(false)}
+                      onClick={() => handleSaveStep1(true)}
                       disabled={savingStep}
-                      className="px-4 py-2 rounded-xl border border-[#E0DCD3] text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Save className="w-3.5 h-3.5" />
-                      Save Draft
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSaveStep2(true)}
-                      disabled={savingStep}
-                      className="px-6 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                      className="px-5 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                     >
                       {savingStep ? (
                         <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       ) : (
                         <>
-                          <span>Continue to Step 3: Criteria</span>
+                          <span>Save &amp; Continue to Step 2</span>
                           <ArrowRight className="w-4 h-4" />
                         </>
                       )}
                     </button>
-                  </div>
-                </div>
-              </div>
-            )}
+                  )}
 
-            {/* STEP 3 CONTAINER: Whole-Elective Criteria (Min CGPA, Semesters, Degrees, Branches) & Launch */}
-            {wizardStep === 3 && (
-              <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
-                <div>
-                  <h3 className="text-base font-bold text-[#192A24]">
-                    Step 3: Whole-Elective Eligibility Criteria &amp; Final Launch
-                  </h3>
-                  <p className="text-xs text-stone-600 mt-1">
-                    Configure optional eligibility criteria that apply to the whole elective basket. All criteria here are optional (open to all students by default).
-                  </p>
-                </div>
-
-                <div className="p-5 rounded-2xl bg-[#FAF9F7] border border-[#E5E0D8] space-y-4">
-                  {/* Overall CGPA Cutoff */}
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-700 mb-1">
-                      Overall Minimum CGPA <span className="text-stone-400 font-normal">(Optional for entire elective)</span>
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="10"
-                      placeholder="e.g. 7.00 (Leave blank for no general cutoff)"
-                      value={electiveForm.minCgpa}
-                      onChange={(e) => setElectiveForm({ ...electiveForm, minCgpa: e.target.value })}
-                      className="w-full sm:w-64 px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm focus:border-[#1B4D3E] focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Allowed Semesters */}
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                      Allowed Semesters <span className="text-stone-400 font-normal">(Optional)</span>
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableSemesters.map((sem) => {
-                        const selected = electiveForm.allowedSemesters.includes(sem);
-                        return (
-                          <button
-                            key={sem}
-                            type="button"
-                            onClick={() => handleToggleSemester(sem)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-                              selected
-                                ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
-                                : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
-                            }`}
-                          >
-                            Semester {sem}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Target Degrees */}
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                      Target Degrees <span className="text-stone-400 font-normal">(Optional)</span>
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableDegrees.map((deg) => {
-                        const selected = electiveForm.targetDegrees.includes(deg);
-                        return (
-                          <button
-                            key={deg}
-                            type="button"
-                            onClick={() => handleToggleDegree(deg)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-                              selected
-                                ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
-                                : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
-                            }`}
-                          >
-                            {deg}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Target Branches */}
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                      Target Branches <span className="text-stone-400 font-normal">(Optional)</span>
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableBranches.map((br) => {
-                        const selected = electiveForm.targetBranches.includes(br);
-                        return (
-                          <button
-                            key={br}
-                            type="button"
-                            onClick={() => handleToggleBranch(br)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-                              selected
-                                ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
-                                : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
-                            }`}
-                          >
-                            {br}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Final Review Summary Card */}
-                <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 text-xs text-emerald-950 space-y-2">
-                  <div className="font-bold flex items-center gap-1.5 text-emerald-900">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                    Review Summary Before Launch
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-stone-700 pt-1">
-                    <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-semibold">Title</span>
-                      <div className="font-bold truncate">{electiveForm.title || 'Untitled'}</div>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-semibold">Deadline</span>
-                      <div className="font-bold truncate">
-                        {electiveForm.submissionDeadline ? new Date(electiveForm.submissionDeadline).toLocaleDateString() : '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-semibold">Courses</span>
-                      <div className="font-bold">{electiveForm.courses.length} Courses</div>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-semibold">Total Seats</span>
-                      <div className="font-bold text-[#1B4D3E]">
-                        {electiveForm.courses.reduce((sum, c) => sum + (Number(c.capacity) || 0), 0)} Seats
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Step 3 Actions */}
-                <div className="flex items-center justify-between pt-4 border-t border-[#EFECE6]">
-                  <button
-                    type="button"
-                    onClick={() => setWizardStep(2)}
-                    className="px-4 py-2 rounded-xl border border-[#E0DCD3] text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Back to Step 2
-                  </button>
-
-                  <div className="flex items-center gap-2">
+                  {wizardStep === 2 && (
                     <button
                       type="button"
-                      onClick={() => handleSaveStep3(false)}
+                      onClick={() => handleSaveStep2(true)}
                       disabled={savingStep}
-                      className="px-4 py-2 rounded-xl border border-[#E0DCD3] text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                      className="px-5 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                     >
-                      <Save className="w-3.5 h-3.5" />
-                      Save as Draft
+                      {savingStep ? (
+                        <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span>Save &amp; Continue to Step 3</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
                     </button>
+                  )}
 
+                  {wizardStep === 3 && (
                     <button
                       type="button"
                       onClick={() => handleSaveStep3(true)}
                       disabled={savingStep}
-                      className="px-6 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                      className="px-5 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                     >
                       {savingStep ? (
                         <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1715,10 +1363,502 @@ export default function FacultyDashboard() {
                         </>
                       )}
                     </button>
-                  </div>
+                  )}
+
+                  {/* Save Draft Button right next to it */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (wizardStep === 1) handleSaveStep1(false);
+                      else if (wizardStep === 2) handleSaveStep2(false);
+                      else handleSaveStep3(false);
+                    }}
+                    disabled={savingStep}
+                    className="px-4 py-2.5 rounded-xl border border-[#E0DCD3] bg-white text-stone-700 hover:bg-[#F3F1EC] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5 text-stone-500" />
+                    <span>Save Draft</span>
+                  </button>
+
+                  {/* Back button if past step 1 */}
+                  {wizardStep > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setWizardStep(wizardStep - 1)}
+                      className="px-3 py-2 rounded-xl text-stone-500 hover:text-stone-800 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">
+                    {wizardStep === 1 && 'Step 1: Details'}
+                    {wizardStep === 2 && `Step 2: Pool (${electiveForm.courses.length} courses)`}
+                    {wizardStep === 3 && 'Step 3: Criteria & Launch'}
+                  </span>
                 </div>
               </div>
-            )}
+
+              {/* STEP 1: Title, Description, Submission Deadline, Academic Term */}
+              {wizardStep === 1 && (
+                <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
+                  <div>
+                    <h3 className="text-base font-bold text-[#192A24]">
+                      Step 1: General Details &amp; Submission Deadline
+                    </h3>
+                    <p className="text-xs text-stone-600 mt-1">
+                      Name this elective offering, describe the syllabus track, set the required deadline, and define the academic term.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Title */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-stone-700">
+                        Elective Title *
+                        {fieldErrors.title && (
+                          <span className="text-red-600 font-semibold text-xs ml-2 normal-case tracking-normal">
+                            (Title is required)
+                          </span>
+                        )}
+                      </label>
+                      <input
+                        type="text"
+                        value={electiveForm.title}
+                        onChange={(e) => {
+                          clearFieldError('title');
+                          setElectiveForm({ ...electiveForm, title: e.target.value });
+                        }}
+                        placeholder="e.g. Professional Elective Basket - Fall 2026"
+                        className={`w-full px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all focus:outline-none ${
+                          fieldErrors.title
+                            ? 'border-2 border-red-500 bg-red-50/40 text-red-950 placeholder:text-red-400'
+                            : 'bg-[#FAF9F7] border border-[#E0DCD3] focus:ring-2 focus:ring-[#1B4D3E]/20 focus:border-[#1B4D3E]'
+                        }`}
+                        required
+                      />
+                    </div>
+
+                    {/* Short Description */}
+                    <div>
+                      <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
+                        Short Description
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={electiveForm.description}
+                        onChange={(e) =>
+                          setElectiveForm({ ...electiveForm, description: e.target.value })
+                        }
+                        placeholder="Brief overview and scope of this elective basket for students..."
+                        className="w-full px-3.5 py-2.5 bg-[#FAF9F7] border border-[#E0DCD3] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#1B4D3E]/20 focus:border-[#1B4D3E]"
+                      />
+                    </div>
+
+                    {/* Submission Deadline & Term */}
+                    <div
+                      className={`grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl border transition-all ${
+                        fieldErrors.submissionDeadline
+                          ? 'bg-red-50/50 border-red-300'
+                          : 'bg-amber-50/70 border-amber-200'
+                      }`}
+                    >
+                      <div>
+                        <label
+                          className={`block text-xs font-bold uppercase tracking-wider mb-1 ${
+                            fieldErrors.submissionDeadline ? 'text-red-800' : 'text-amber-900'
+                          }`}
+                        >
+                          Submission Deadline * <span className="text-xs font-normal">(Required)</span>
+                          {fieldErrors.submissionDeadline && (
+                            <span className="block text-red-600 font-semibold normal-case text-[11px] mt-0.5">
+                              Deadline is required
+                            </span>
+                          )}
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={electiveForm.submissionDeadline}
+                          onChange={(e) => {
+                            clearFieldError('submissionDeadline');
+                            setElectiveForm({ ...electiveForm, submissionDeadline: e.target.value });
+                          }}
+                          className={`w-full px-3.5 py-2 rounded-xl text-sm font-semibold focus:outline-none transition-all ${
+                            fieldErrors.submissionDeadline
+                              ? 'border-2 border-red-500 bg-red-50/60 text-red-950'
+                              : 'bg-white border border-amber-300 focus:border-[#1B4D3E]'
+                          }`}
+                          required
+                        />
+                        <p className="text-[11px] text-amber-800 mt-1">
+                          The matching algorithm will automatically run before publishing results once this deadline expires.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1">
+                            Academic Term
+                          </label>
+                          <input
+                            type="text"
+                            value={electiveForm.term}
+                            onChange={(e) =>
+                              setElectiveForm({ ...electiveForm, term: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm font-semibold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1">
+                            Department
+                          </label>
+                          <input
+                            type="text"
+                            value={electiveForm.department}
+                            onChange={(e) =>
+                              setElectiveForm({ ...electiveForm, department: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm font-semibold"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: Courses Pool (at least 2 courses) with Add Button at TOP (Bottom to Top order) */}
+              {wizardStep === 2 && (
+                <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#EFECE6]">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-[#192A24]">
+                          Step 2: Courses in this Elective
+                        </h3>
+                        <span
+                          className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                            electiveForm.courses.length >= 2
+                              ? 'bg-[#E8F5E9] text-[#1B4D3E] border-[#C8E6C9]'
+                              : 'bg-red-50 text-red-700 border-red-200'
+                          }`}
+                        >
+                          {electiveForm.courses.length >= 2
+                            ? `${electiveForm.courses.length} Courses Added`
+                            : `${electiveForm.courses.length} of 2 Minimum Courses`}
+                        </span>
+                      </div>
+                      <p className="text-xs text-stone-600 mt-1">
+                        Courses are ordered bottom-to-top. Click &ldquo;+ Add Course&rdquo; to insert a new course at the top of the pool.
+                      </p>
+                    </div>
+
+                    {/* ADD COURSE BUTTON (AT THE TOP) */}
+                    <button
+                      type="button"
+                      onClick={handleAddCourseRow}
+                      className="px-4 py-2.5 rounded-xl bg-[#1B4D3E] hover:bg-[#2E6F5A] text-white transition-all text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-xs self-start sm:self-auto"
+                      title="Add a new course at the top of the list"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      + Add Course (at Top)
+                    </button>
+                  </div>
+
+                  {/* Course Cards List (Newest at top) */}
+                  <div className="space-y-4">
+                    {electiveForm.courses.map((course, idx) => {
+                      const hasCodeError = !!fieldErrors[`course_${idx}_code`];
+                      const hasTitleError = !!fieldErrors[`course_${idx}_title`];
+                      const hasCapacityError = !!fieldErrors[`course_${idx}_capacity`];
+                      const hasAnyError = hasCodeError || hasTitleError || hasCapacityError;
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-4 rounded-xl border shadow-2xs relative space-y-3 transition-all ${
+                            hasAnyError
+                              ? 'bg-red-50/20 border-red-300'
+                              : 'bg-[#FAF9F7] border-[#E5E0D8]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-[#1B4D3E] flex items-center gap-1.5">
+                              <BookOpen className="w-3.5 h-3.5" />
+                              Course #{idx + 1}
+                              {idx === 0 && (
+                                <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-stone-100 text-stone-600 border border-stone-200">
+                                  Top / Newest
+                                </span>
+                              )}
+                            </span>
+                            {electiveForm.courses.length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveCourseRow(idx)}
+                                className="text-stone-400 hover:text-red-600 p-1 rounded cursor-pointer transition-colors"
+                                title="Remove course"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                            {/* Course Code */}
+                            <div className="sm:col-span-3">
+                              <label
+                                className={`block text-[11px] font-semibold mb-1 ${
+                                  hasCodeError ? 'text-red-700 font-bold' : 'text-stone-600'
+                                }`}
+                              >
+                                Course Code *
+                              </label>
+                              <input
+                                type="text"
+                                value={course.code}
+                                onChange={(e) => handleCourseFieldChange(idx, 'code', e.target.value)}
+                                placeholder="e.g. CS501"
+                                className={`w-full px-3 py-1.5 rounded-lg text-xs font-mono uppercase font-bold focus:outline-none transition-all ${
+                                  hasCodeError
+                                    ? 'border-2 border-red-500 bg-red-50/60 text-red-950 placeholder:text-red-400'
+                                    : 'bg-white border border-[#E0DCD3] focus:border-[#1B4D3E]'
+                                }`}
+                                required
+                              />
+                            </div>
+
+                            {/* Course Name */}
+                            <div className="sm:col-span-5">
+                              <label
+                                className={`block text-[11px] font-semibold mb-1 ${
+                                  hasTitleError ? 'text-red-700 font-bold' : 'text-stone-600'
+                                }`}
+                              >
+                                Course Name *
+                              </label>
+                              <input
+                                type="text"
+                                value={course.title}
+                                onChange={(e) => handleCourseFieldChange(idx, 'title', e.target.value)}
+                                placeholder="e.g. Machine Learning &amp; Deep Systems"
+                                className={`w-full px-3 py-1.5 rounded-lg text-xs font-medium focus:outline-none transition-all ${
+                                  hasTitleError
+                                    ? 'border-2 border-red-500 bg-red-50/60 text-red-950 placeholder:text-red-400'
+                                    : 'bg-white border border-[#E0DCD3] focus:border-[#1B4D3E]'
+                                }`}
+                                required
+                              />
+                            </div>
+
+                            {/* Credits */}
+                            <div className="sm:col-span-2">
+                              <label className="block text-[11px] font-semibold text-stone-600 mb-1">
+                                Credits
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="8"
+                                value={course.credits}
+                                onChange={(e) => handleCourseFieldChange(idx, 'credits', e.target.value)}
+                                className="w-full px-3 py-1.5 bg-white border border-[#E0DCD3] rounded-lg text-xs focus:border-[#1B4D3E] focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Capacity */}
+                            <div className="sm:col-span-2">
+                              <label
+                                className={`block text-[11px] font-semibold mb-1 ${
+                                  hasCapacityError ? 'text-red-700 font-bold' : 'text-stone-600'
+                                }`}
+                              >
+                                Seats (Cap) *
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="500"
+                                value={course.capacity}
+                                onChange={(e) => handleCourseFieldChange(idx, 'capacity', e.target.value)}
+                                className={`w-full px-3 py-1.5 rounded-lg text-xs font-bold focus:outline-none transition-all ${
+                                  hasCapacityError
+                                    ? 'border-2 border-red-500 bg-red-50/60 text-red-950'
+                                    : 'bg-white border border-[#E0DCD3] text-[#1B4D3E] focus:border-[#1B4D3E]'
+                                }`}
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          {/* Individual Course CGPA Criteria */}
+                          <div className="pt-2 border-t border-[#EFECE6] flex items-center gap-3">
+                            <label className="text-[11px] font-semibold text-stone-600 shrink-0">
+                              Course Min CGPA <span className="text-stone-400 font-normal">(Individual cutoff):</span>
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max="10"
+                              placeholder="e.g. 7.50 (or leave blank)"
+                              value={course.minCgpa}
+                              onChange={(e) => handleCourseFieldChange(idx, 'minCgpa', e.target.value)}
+                              className="w-36 px-2.5 py-1 bg-white border border-[#E0DCD3] rounded-lg text-xs focus:border-[#1B4D3E] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: Whole-Elective Criteria & Launch */}
+              {wizardStep === 3 && (
+                <div className="bg-white rounded-2xl border border-[#E5E0D8] p-6 sm:p-8 shadow-xs space-y-6">
+                  <div>
+                    <h3 className="text-base font-bold text-[#192A24]">
+                      Step 3: Whole-Elective Eligibility Criteria &amp; Final Launch
+                    </h3>
+                    <p className="text-xs text-stone-600 mt-1">
+                      Configure optional eligibility criteria that apply to the whole elective basket. All criteria here are optional (open to all students by default).
+                    </p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-[#FAF9F7] border border-[#E5E0D8] space-y-4">
+                    {/* Overall CGPA Cutoff */}
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-700 mb-1">
+                        Overall Minimum CGPA <span className="text-stone-400 font-normal">(Optional for entire elective)</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="10"
+                        placeholder="e.g. 7.00 (Leave blank for no general cutoff)"
+                        value={electiveForm.minCgpa}
+                        onChange={(e) => setElectiveForm({ ...electiveForm, minCgpa: e.target.value })}
+                        className="w-full sm:w-64 px-3.5 py-2 bg-white border border-[#E0DCD3] rounded-xl text-sm focus:border-[#1B4D3E] focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Allowed Semesters */}
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                        Allowed Semesters <span className="text-stone-400 font-normal">(Optional)</span>
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableSemesters.map((sem) => {
+                          const selected = electiveForm.allowedSemesters.includes(sem);
+                          return (
+                            <button
+                              key={sem}
+                              type="button"
+                              onClick={() => handleToggleSemester(sem)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                                selected
+                                  ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
+                                  : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
+                              }`}
+                            >
+                              Semester {sem}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Target Degrees */}
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                        Target Degrees <span className="text-stone-400 font-normal">(Optional)</span>
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableDegrees.map((deg) => {
+                          const selected = electiveForm.targetDegrees.includes(deg);
+                          return (
+                            <button
+                              key={deg}
+                              type="button"
+                              onClick={() => handleToggleDegree(deg)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                                selected
+                                  ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
+                                  : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
+                              }`}
+                            >
+                              {deg}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Target Branches */}
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                        Target Branches <span className="text-stone-400 font-normal">(Optional)</span>
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableBranches.map((br) => {
+                          const selected = electiveForm.targetBranches.includes(br);
+                          return (
+                            <button
+                              key={br}
+                              type="button"
+                              onClick={() => handleToggleBranch(br)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                                selected
+                                  ? 'bg-[#1B4D3E] text-white border-[#1B4D3E]'
+                                  : 'bg-white text-stone-600 border-[#E0DCD3] hover:border-[#1B4D3E]'
+                              }`}
+                            >
+                              {br}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Final Review Summary Card */}
+                  <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 text-xs text-emerald-950 space-y-2">
+                    <div className="font-bold flex items-center gap-1.5 text-emerald-900">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                      Review Summary Before Launch
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-stone-700 pt-1">
+                      <div>
+                        <span className="text-[10px] text-stone-500 uppercase font-semibold">Title</span>
+                        <div className="font-bold truncate">{electiveForm.title || 'Untitled'}</div>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-stone-500 uppercase font-semibold">Deadline</span>
+                        <div className="font-bold truncate">
+                          {electiveForm.submissionDeadline ? new Date(electiveForm.submissionDeadline).toLocaleDateString() : '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-stone-500 uppercase font-semibold">Courses</span>
+                        <div className="font-bold">{electiveForm.courses.length} Courses</div>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-stone-500 uppercase font-semibold">Total Seats</span>
+                        <div className="font-bold text-[#1B4D3E]">
+                          {electiveForm.courses.reduce((sum, c) => sum + (Number(c.capacity) || 0), 0)} Seats
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
