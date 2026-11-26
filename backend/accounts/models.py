@@ -9,12 +9,26 @@ class User(AbstractUser):
         INSTRUCTOR = 'INSTRUCTOR', 'Instructor'
         ADMIN = 'ADMIN', 'Admin'
 
-    email = models.EmailField(unique=True)
+    class AuthProvider(models.TextChoices):
+        MANUAL = 'MANUAL', 'Manual'
+        GOOGLE = 'GOOGLE', 'Google'
+        GITHUB = 'GITHUB', 'GitHub'
+
+    email = models.EmailField(unique=True, db_index=True)
+    password = models.CharField(max_length=128, blank=True, null=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.STUDENT)
+    profile_completed = models.BooleanField(default=True, db_index=True)
+    auth_provider = models.CharField(max_length=20, choices=AuthProvider.choices, default=AuthProvider.MANUAL)
+    provider_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
 
     @property
     def is_faculty(self) -> bool:
         return self.role in [self.Role.FACULTY, self.Role.INSTRUCTOR, self.Role.ADMIN] or self.is_staff
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.username} ({self.role})"

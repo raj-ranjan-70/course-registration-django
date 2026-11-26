@@ -8,14 +8,23 @@ export function generateIdempotencyKey() {
 }
 
 /**
- * Unified Login using identifier (email, username, or registration number) and password.
+ * Unified Login using identifier (email, username, or registration number), password, and Turnstile token.
  */
-export async function loginUser({ identifier, password, username }) {
+export async function loginUser({ identifier, password, username, cf_turnstile_token }) {
   const loginIdentifier = identifier || username;
   const response = await api.post('/auth/login/', {
     username: loginIdentifier,
     password,
+    cf_turnstile_token,
   });
+  return response.data;
+}
+
+/**
+ * Complete student profile after OAuth authentication.
+ */
+export async function completeProfile(profileData) {
+  const response = await api.post('/auth/complete-profile/', profileData);
   return response.data;
 }
 

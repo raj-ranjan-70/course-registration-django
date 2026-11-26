@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardRouter from './pages/DashboardRouter';
+import CompleteProfilePage from './pages/CompleteProfilePage';
 
 export default function App() {
   return (
@@ -15,6 +16,9 @@ export default function App() {
 
           {/* Dedicated Student Registration Page */}
           <Route path="/register" element={<RegisterPage />} />
+
+          {/* Post-OAuth Student Profile Completion */}
+          <Route path="/complete-profile" element={<CompleteProfilePage />} />
 
           {/* Shared URL for dashboards (routes internally to Student or Faculty Dashboard based on role/permissions) */}
           <Route path="/dashboard" element={<DashboardRouter />} />

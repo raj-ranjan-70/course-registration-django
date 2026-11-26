@@ -25,7 +25,26 @@ def get_user_role_and_permissions(user):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role']
+        fields = [
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'role',
+            'profile_completed',
+            'auth_provider',
+            'provider_id',
+        ]
+
+
+class CompleteProfileSerializer(serializers.Serializer):
+    name = serializers.CharField(required=True)
+    registration_number = serializers.CharField(required=True)
+    degree = serializers.CharField(required=False, default='B.Tech')
+    branch = serializers.CharField(required=False, default='CSE')
+    semester = serializers.IntegerField(required=False, default=5, min_value=1, max_value=10)
+    cgpa = serializers.FloatField(required=False, default=8.0, min_value=0.0, max_value=10.0)
 
 
 class StudentProfileDetailSerializer(serializers.ModelSerializer):

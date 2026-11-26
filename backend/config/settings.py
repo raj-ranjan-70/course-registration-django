@@ -8,8 +8,14 @@ import os
 from pathlib import Path
 from corsheaders.defaults import default_headers
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+try:
+    from dotenv import load_dotenv
+    # Build paths inside the project like this: BASE_DIR / 'subdir'.
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    load_dotenv(BASE_DIR / '.env')
+    load_dotenv(BASE_DIR.parent / '.env')
+except ImportError:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get(
@@ -162,7 +168,10 @@ SIMPLE_JWT = {
 }
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'idempotency-key',
@@ -170,6 +179,36 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-student-id',
     'authorization',
 ]
+
+# Session and Cookie settings for local development
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SECURE = False
+
+# Cloudflare Turnstile Settings
+TURNSTILE_SECRET_KEY = os.environ.get('TURNSTILE_SECRET_KEY', '')
+
+# Google OAuth 2.0 & OIDC
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REDIRECT_URI = os.environ.get(
+    'GOOGLE_REDIRECT_URI',
+    'http://localhost:8000/api/auth/google/callback'
+)
+
+# GitHub OAuth 2.0
+GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID', '')
+GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET', '')
+GITHUB_REDIRECT_URI = os.environ.get(
+    'GITHUB_REDIRECT_URI',
+    'http://localhost:8000/api/auth/github/callback'
+)
+
+# Frontend Application URL
+FRONTEND_URL = os.environ.get(
+    'FRONTEND_URL',
+    'http://localhost:5173'
+)
 
 # Email
 MAILERS = {

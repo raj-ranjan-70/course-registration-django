@@ -6,7 +6,7 @@ import StudentDashboard from './StudentDashboard';
 import { GraduationCap } from 'lucide-react';
 
 export default function DashboardRouter() {
-  const { isAuthenticated, isFaculty, isStudent, role, loading } = useAuth();
+  const { isAuthenticated, isFaculty, isStudent, profileCompleted, role, loading } = useAuth();
 
   if (loading) {
     return (
@@ -26,6 +26,11 @@ export default function DashboardRouter() {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  // If user profile is not completed (e.g. newly signed up via OAuth), redirect to profile completion
+  if (!profileCompleted) {
+    return <Navigate to="/complete-profile" replace />;
   }
 
   // Internal routing based on user's role and permissions
