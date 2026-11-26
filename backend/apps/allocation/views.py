@@ -162,8 +162,52 @@ class ElectivePreferenceViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # Check if student already submitted preferences and faculty disabled editing
+            from courses.models import ElectiveGroup
+            elective = None
+            if courses and courses[0].elective_group:
+                elective = courses[0].elective_group
+            if not elective:
+                elective = ElectiveGroup.objects.filter(term=term, is_draft=False).first()
+
+            elective_course_ids = []
+            if elective:
+                elective_course_ids = list(elective.courses.values_list('id', flat=True))
+                has_existing = ElectivePreference.objects.filter(student=student, course_id__in=elective_course_ids).exists()
+                if has_existing and not elective.allow_preference_editing:
+                    return Response(
+                        {
+                            'error': 'PreferenceEditingDisabledError',
+                            'detail': 'Preferences have already been submitted. The faculty has configured this elective with editing disabled.',
+                            'code': 'EDITING_DISABLED',
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+                if elective.allowed_semesters and student.semester is not None:
+                    if student.semester not in elective.allowed_semesters:
+                        return Response(
+                            {
+                                'error': 'IneligibleSemesterError',
+                                'detail': f"This elective is restricted to Semester(s) {elective.allowed_semesters}. Your semester is {student.semester}.",
+                                'code': 'INELIGIBLE_SEMESTER',
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
             # Enforce Faculty Deadlines: Check if submission deadline has passed for any chosen course
             for course in courses:
+                if course.min_cgpa and student.cgpa is not None:
+                    if float(student.cgpa) < float(course.min_cgpa):
+                        return Response(
+                            {
+                                'error': 'IneligibleCourseError',
+                                'detail': f"You do not meet the minimum CGPA requirement of {course.min_cgpa} for course {course.code} (Your CGPA: {student.cgpa}).",
+                                'code': 'INELIGIBLE_COURSE',
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                 if course.submission_deadline and now > course.submission_deadline:
                     deadline_str = course.submission_deadline.strftime('%b %d, %Y at %I:%M %p')
                     return Response(
@@ -176,8 +220,11 @@ class ElectivePreferenceViewSet(viewsets.ModelViewSet):
                     )
 
             with transaction.atomic():
-                # Replace existing preferences for this student in this term
-                ElectivePreference.objects.filter(student=student, term=term).delete()
+                # Replace existing preferences for this student for this elective / term
+                if elective_course_ids:
+                    ElectivePreference.objects.filter(student=student, course_id__in=elective_course_ids).delete()
+                else:
+                    ElectivePreference.objects.filter(student=student, term=term).delete()
 
                 prefs_to_create = [
                     ElectivePreference(

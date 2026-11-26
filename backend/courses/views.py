@@ -96,8 +96,16 @@ class ElectiveGroupViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = ElectiveGroup.objects.prefetch_related('courses__sections').all()
         if not getattr(user, 'is_faculty', False):
-            # Students only see active, finalized electives
-            return qs.filter(is_draft=False)
+            # Students only see active, finalized electives matching their semester
+            qs = qs.filter(is_draft=False)
+            student = getattr(user, 'student_profile', None)
+            if student and student.semester is not None:
+                eligible_ids = [
+                    el.id for el in qs
+                    if not el.allowed_semesters or student.semester in el.allowed_semesters
+                ]
+                return qs.filter(id__in=eligible_ids)
+            return qs
 
         # Faculty can filter by draft status: ?is_draft=true or ?is_draft=false
         is_draft_param = self.request.query_params.get('is_draft')

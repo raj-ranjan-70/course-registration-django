@@ -94,6 +94,7 @@ export default function FacultyDashboard() {
     targetDegrees: [],
     targetBranches: [],
     maxPreferences: 5,
+    allowPreferenceEditing: true,
     // List of courses (Step 2 - at least 2 courses):
     courses: [
       { code: '', title: '', credits: 3, capacity: 30, minCgpa: '' },
@@ -267,6 +268,7 @@ export default function FacultyDashboard() {
       targetDegrees: [],
       targetBranches: [],
       maxPreferences: 5,
+      allowPreferenceEditing: true,
       courses: [
         { code: '', title: '', credits: 3, capacity: 30, minCgpa: '' },
         { code: '', title: '', credits: 3, capacity: 30, minCgpa: '' },
@@ -316,6 +318,7 @@ export default function FacultyDashboard() {
         targetDegrees: draft.target_degrees || [],
         targetBranches: draft.target_branches || [],
         maxPreferences: draft.max_preferences || 5,
+        allowPreferenceEditing: draft.allow_preference_editing !== false,
         courses: restoredCourses,
       });
 
@@ -376,6 +379,7 @@ export default function FacultyDashboard() {
         submission_deadline: deadlineIso,
         term: electiveForm.term.trim() || 'Fall 2026',
         department: electiveForm.department || 'Computer Science',
+        allow_preference_editing: electiveForm.allowPreferenceEditing,
       };
 
       const result = await saveElectiveStep1(payload);
@@ -501,6 +505,7 @@ export default function FacultyDashboard() {
         target_degrees: electiveForm.targetDegrees,
         target_branches: electiveForm.targetBranches,
         max_preferences: Number(electiveForm.maxPreferences) || 5,
+        allow_preference_editing: electiveForm.allowPreferenceEditing,
         finalize,
       };
 
@@ -1535,6 +1540,32 @@ export default function FacultyDashboard() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Preference Editing Setting */}
+                    <div className="p-4 rounded-xl bg-white border border-[#E0DCD3] flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-bold text-stone-800">
+                          Allow Students to Edit Submitted Preferences Before Deadline
+                        </div>
+                        <p className="text-[11px] text-stone-500 mt-0.5">
+                          If disabled, students can submit preferences only once, will see an irreversible warning, and must type &ldquo;understand&rdquo; to confirm.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={electiveForm.allowPreferenceEditing}
+                          onChange={(e) =>
+                            setElectiveForm({
+                              ...electiveForm,
+                              allowPreferenceEditing: e.target.checked,
+                            })
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#1B4D3E]" />
+                      </label>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1862,6 +1893,32 @@ export default function FacultyDashboard() {
                           {electiveForm.courses.reduce((sum, c) => sum + (Number(c.capacity) || 0), 0)} Seats
                         </div>
                       </div>
+                    </div>
+
+                    {/* Preference Editing Setting */}
+                    <div className="p-4 rounded-xl bg-white border border-[#E0DCD3] flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-xs font-bold text-stone-800">
+                          Allow Students to Edit Submitted Preferences Before Deadline
+                        </div>
+                        <p className="text-[11px] text-stone-500 mt-0.5">
+                          If disabled, students can submit preferences only once, will see an irreversible warning, and must type &ldquo;understand&rdquo; to confirm.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={electiveForm.allowPreferenceEditing}
+                          onChange={(e) =>
+                            setElectiveForm({
+                              ...electiveForm,
+                              allowPreferenceEditing: e.target.checked,
+                            })
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#1B4D3E]" />
+                      </label>
                     </div>
                   </div>
                 </div>

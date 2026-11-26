@@ -333,6 +333,7 @@ class ElectiveGroupSerializer(serializers.ModelSerializer):
             'target_degrees',
             'target_branches',
             'max_preferences',
+            'allow_preference_editing',
             'instructor',
             'instructor_name',
             'courses',
@@ -362,6 +363,7 @@ class ElectiveStep1Serializer(serializers.Serializer):
     submission_deadline = serializers.DateTimeField(required=True)
     term = serializers.CharField(required=False, default='Fall 2026')
     department = serializers.CharField(required=False, allow_blank=True, default='Computer Science')
+    allow_preference_editing = serializers.BooleanField(required=False, default=True)
 
 
 class ElectiveStep2Serializer(serializers.Serializer):
@@ -388,6 +390,7 @@ class ElectiveStep3Serializer(serializers.Serializer):
     target_degrees = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     target_branches = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     max_preferences = serializers.IntegerField(required=False, default=5)
+    allow_preference_editing = serializers.BooleanField(required=False, default=True)
     finalize = serializers.BooleanField(required=False, default=False)
 
 
@@ -402,5 +405,6 @@ class ElectiveGroupCreateSerializer(serializers.Serializer):
     target_degrees = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     target_branches = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     max_preferences = serializers.IntegerField(required=False, default=5)
+    allow_preference_editing = serializers.BooleanField(required=False, default=True)
     courses = CourseItemCreateSerializer(many=True, required=True)
 

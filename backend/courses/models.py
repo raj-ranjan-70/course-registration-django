@@ -25,6 +25,7 @@ class ElectiveGroup(models.Model):
     target_degrees = models.JSONField(default=list, blank=True)
     target_branches = models.JSONField(default=list, blank=True)
     max_preferences = models.PositiveIntegerField(default=5)
+    allow_preference_editing = models.BooleanField(default=True)  # Whether students can edit preferences before deadline
 
     instructor = models.ForeignKey(
         'accounts.User',
