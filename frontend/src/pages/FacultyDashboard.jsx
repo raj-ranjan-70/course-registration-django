@@ -46,14 +46,14 @@ import {
 
 const DRAFT_STORAGE_KEY = 'faculty_active_elective_draft_id';
 
-// Helper to format ISO date to datetime-local input format (YYYY-MM-DDTHH:MM)
-function formatToDateTimeLocal(dateString) {
+// Helper to format ISO date to date input format (YYYY-MM-DD)
+function formatToDateInput(dateString) {
   if (!dateString) return '';
   try {
     const d = new Date(dateString);
     if (isNaN(d.getTime())) return '';
     const pad = (num) => String(num).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   } catch {
     return '';
   }
@@ -310,7 +310,7 @@ export default function FacultyDashboard() {
         description: draft.description || '',
         department: draft.department || 'Computer Science',
         term: draft.term || 'Fall 2026',
-        submissionDeadline: formatToDateTimeLocal(draft.submission_deadline),
+        submissionDeadline: formatToDateInput(draft.submission_deadline),
         minCgpa: draft.min_cgpa !== null && draft.min_cgpa !== undefined ? String(draft.min_cgpa) : '',
         allowedSemesters: draft.allowed_semesters || [],
         targetDegrees: draft.target_degrees || [],
@@ -361,11 +361,19 @@ export default function FacultyDashboard() {
 
     setSavingStep(true);
     try {
+      // Convert selected date (YYYY-MM-DD) to 23:59:59 (12 midnight deadline)
+      let deadlineIso = '';
+      if (electiveForm.submissionDeadline) {
+        const datePart = electiveForm.submissionDeadline.split('T')[0];
+        const endOfDay = new Date(`${datePart}T23:59:59`);
+        deadlineIso = endOfDay.toISOString();
+      }
+
       const payload = {
         draft_id: draftId,
         title: electiveForm.title.trim(),
         description: electiveForm.description.trim(),
-        submission_deadline: new Date(electiveForm.submissionDeadline).toISOString(),
+        submission_deadline: deadlineIso,
         term: electiveForm.term.trim() || 'Fall 2026',
         department: electiveForm.department || 'Computer Science',
       };
@@ -1472,15 +1480,15 @@ export default function FacultyDashboard() {
                             fieldErrors.submissionDeadline ? 'text-red-800' : 'text-amber-900'
                           }`}
                         >
-                          Submission Deadline * <span className="text-xs font-normal">(Required)</span>
+                          Submission Deadline Date * <span className="text-xs font-normal">(Required)</span>
                           {fieldErrors.submissionDeadline && (
                             <span className="block text-red-600 font-semibold normal-case text-[11px] mt-0.5">
-                              Deadline is required
+                              Deadline date is required
                             </span>
                           )}
                         </label>
                         <input
-                          type="datetime-local"
+                          type="date"
                           value={electiveForm.submissionDeadline}
                           onChange={(e) => {
                             clearFieldError('submissionDeadline');
@@ -1494,7 +1502,7 @@ export default function FacultyDashboard() {
                           required
                         />
                         <p className="text-[11px] text-amber-800 mt-1">
-                          The matching algorithm will automatically run before publishing results once this deadline expires.
+                          Preference filling closes automatically after 12 midnight on this date, and the matching algorithm will run.
                         </p>
                       </div>
 
